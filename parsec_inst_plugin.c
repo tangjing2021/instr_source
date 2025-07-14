@@ -35,15 +35,6 @@ static const char *instr_type[] = {
 static uint64_t counts[NUM_INSTR_TYPES] = {0};
 static uint64_t exe_counts[NUM_INSTR_TYPES] = {0};
 
-// 多线程统计
-#define MAX_VCPUS 1024
-typedef struct {
-    int guest_tid;
-    bool active;
-    uint64_t per_vcpu_exe_counts[NUM_INSTR_TYPES];
-} VCPUStats;
-static pthread_mutex_t vcpu_lock;
-static VCPUStats vcpu_stats_table[MAX_VCPUS];
 
 static csh cs_handle;
 static uint64_t class_time_ns[NUM_INSTR_TYPES] = {0};
@@ -362,10 +353,7 @@ static void insn_exec_cb(unsigned int vcpu_index, void *ud) {
     exe_counts[type_idx]++;
     vcpu_stats_table[vcpu_index].per_vcpu_exe_counts[type_idx]++;
 }
-static void call_insn_cb(unsigned int vcpu_index, void *udata) {
-    // 1) 拿到执行到的指令句柄
 
-}
 static void tb_trans_cb(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
     size_t n = qemu_plugin_tb_n_insns(tb);
     for (size_t i = 0; i < n; i++) {
@@ -398,177 +386,99 @@ static void tb_trans_cb(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
                     NULL
                 );
             }
-            // if (ci->id == RISCV_INS_JAL || ci->id == RISCV_INS_JALR) {
-            //     qemu_plugin_register_vcpu_insn_exec_cb(
-            //         insn, call_insn_cb, QEMU_PLUGIN_CB_NO_REGS, NULL
-            //     );
-            // }
 
 
             cs_free(ci, 1);
         }
     }
 }
-
-static void syscall_ret_cb(qemu_plugin_id_t id, unsigned int vcpu_index,
-                           int64_t num, int64_t ret)
-{
-    // riscv64 的 clone 系统调用号是 220
-    if (num == 220 && ret > 0) {
-        if (vcpu_index < MAX_VCPUS) {
-            pthread_mutex_lock(&vcpu_lock);
-            if (!vcpu_stats_table[vcpu_index].active) {
-                vcpu_stats_table[vcpu_index].active = true;
-                vcpu_stats_table[vcpu_index].guest_tid = (int)ret;
-            }
-            pthread_mutex_unlock(&vcpu_lock);
-        }
-    }
-}
+/* 退出时汇总并写入文件 */
 static void exit_cb(qemu_plugin_id_t id, void *p) {
-    // 先计算并打印全局动态指令总数
-    FILE *f_inst  ;
-    FILE *f_vaddr ;
-    FILE *f_time  ;
-    FILE *f_stride;
-    // FILE *f_inst   = fopen("plugin_inst",   "w");
-    // FILE *f_vaddr  = fopen("plugin_vaddr",  "w");
-    // FILE *f_time   = fopen("plugin_time",   "w");
-    // FILE *f_stride = fopen("plugin_stride", "w");
-    if (!f_inst || !f_vaddr || !f_time || !f_stride) {
-        perror("fopen");
-        // 如果打开失败，退回到标准输出
-        f_inst  = f_inst  ? f_inst  : stdout;
-        f_vaddr = f_vaddr ? f_vaddr : stdout;
-        f_time  = f_time  ? f_time  : stdout;
-        f_stride = f_stride ? f_stride : stdout;
-    }
-
-    uint64_t global_dynamic_total = 0;
-    for (int i = 0; instr_type[i]; i++) {
-        global_dynamic_total += exe_counts[i];
-    }
+    /* Global Instruction Counts */
+    uint64_t total_dyn = 0;
+    for (int i = 0; instr_type[i]; i++) total_dyn += exe_counts[i];
     fprintf(f_inst, "\n=== Global Instruction Counts ===\n");
     for (int i = 0; instr_type[i]; i++) {
-        if (counts[i] > 0 || exe_counts[i] > 0) {
+        if (counts[i] || exe_counts[i]) {
             fprintf(f_inst, "%-15s : static=%10" PRIu64 " dynamic=%10" PRIu64 "\n",
                     instr_type[i], counts[i], exe_counts[i]);
         }
     }
     fprintf(f_inst, ">>> Global Dynamic Instructions Total: %" PRIu64 " <<<\n",
-    global_dynamic_total);
-    
-    get_top(f_vaddr,addr_head);
-    // // —— 新增：打印时间统计 —— 
-    // struct timespec end_ts;
-    // clock_gettime(CLOCK_MONOTONIC, &end_ts);
-    // uint64_t total_ns = (end_ts.tv_sec  - start_ts.tv_sec ) * 1000000000ULL
-    //                   + (end_ts.tv_nsec - start_ts.tv_nsec);
+            total_dyn);
 
-    // printf("\n=== Instruction Class Timing ===\n");
-    // printf("%-15s : %12s\n", "Class", "Time (ms)");
-    // for (int i = 0; instr_type[i]; i++) {
-    //     double ms = class_time_ns[i] / 1e6;
-    //     if(ms==0) continue;
-    //     printf("%-15s : %12.3f\n",
-    //            instr_type[i], ms);
-    // }
-    // printf(">>> Total Elapsed Time: %.3f ms <<<\n", total_ns / 1e6);
+    /* Top Hot Addresses */
+    get_top(f_vaddr, addr_head);
 
+    /* Instruction Class Timing */
     struct timespec end_ts;
     clock_gettime(CLOCK_MONOTONIC, &end_ts);
-    uint64_t total_ns = (end_ts.tv_sec  - start_ts.tv_sec ) * 1000000000ULL
-                      + (end_ts.tv_nsec - start_ts.tv_nsec);
-
+    uint64_t ns = (end_ts.tv_sec  - start_ts.tv_sec) * 1e9
+                + (end_ts.tv_nsec - start_ts.tv_nsec);
     fprintf(f_time, "\n=== Instruction Class Timing ===\n");
     fprintf(f_time, "%-15s : %12s\n", "Class", "Time (ms)");
     for (int i = 0; instr_type[i]; i++) {
         double ms = class_time_ns[i] / 1e6;
-        if (ms == 0) continue;
-        fprintf(f_time, "%-15s : %12.3f\n",
-                instr_type[i], ms);
+        if (ms > 0) {
+            fprintf(f_time, "%-15s : %12.3f\n", instr_type[i], ms);
+        }
     }
-    fprintf(f_time, ">>> Total Elapsed Time: %.3f ms <<<\n", total_ns / 1e6);
+    fprintf(f_time, ">>> Total Elapsed Time: %.3f ms <<<\n", ns / 1e6);
 
-
-    // 计算总访问数
-    uint64_t total_mem_access = vaddr_same_count
-        + vaddr_1_count + vaddr_2_count
-        + vaddr_4_count + vaddr_8_count
-        + vaddr_disct_count;
-
-    if (total_mem_access > 0) {
+    /* Memory Access Stride */
+    uint64_t mem_tot = vaddr_same_count + vaddr_1_count + vaddr_2_count
+                     + vaddr_4_count + vaddr_8_count + vaddr_disct_count;
+    if (mem_tot) {
         fprintf(f_stride, "\n=== Memory Access Stride Statistics ===\n");
-        fprintf(f_stride, "Total memory accesses: %" PRIu64 "\n", total_mem_access);
-
-        // 打印每种步长的统计
+        fprintf(f_stride, "Total memory accesses: %" PRIu64 "\n", mem_tot);
         fprintf(f_stride, "\n%-20s %12s %12s\n", "Stride Type", "Count", "Percentage");
-
-        // 相同地址访问
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "Same Address", vaddr_same_count,
-                (double)vaddr_same_count / total_mem_access * 100.0);
-
-        // 1字节步长
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "1-byte stride", vaddr_1_count,
-                (double)vaddr_1_count / total_mem_access * 100.0);
-
-        // 2字节步长
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "2-byte stride", vaddr_2_count,
-                (double)vaddr_2_count / total_mem_access * 100.0);
-
-        // 4字节步长
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "4-byte stride", vaddr_4_count,
-                (double)vaddr_4_count / total_mem_access * 100.0);
-
-        // 8字节步长
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "8-byte stride", vaddr_8_count,
-                (double)vaddr_8_count / total_mem_access * 100.0);
-
-        // 离散访问
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "Other strides", vaddr_disct_count,
-                (double)vaddr_disct_count / total_mem_access * 100.0);
+        #define S(type, cnt) \
+            fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n", \
+                    type, cnt, (double)(cnt)/mem_tot*100.0)
+        S("Same Address", vaddr_same_count);
+        S("1-byte stride", vaddr_1_count);
+        S("2-byte stride", vaddr_2_count);
+        S("4-byte stride", vaddr_4_count);
+        S("8-byte stride", vaddr_8_count);
+        S("Other strides", vaddr_disct_count);
+        #undef S
     }
-    // 关闭文件和清理
-    // if (f_inst  != stdout) fclose(f_inst);
-    // if (f_vaddr != stdout) fclose(f_vaddr);
-    // if (f_time  != stdout) fclose(f_time);
-    // if (f_stride != stdout) fclose(f_stride);
-    // pthread_mutex_destroy(&vcpu_lock);
+
+    /* 关闭文件 */
+    if (f_inst   && f_inst   != stdout) fclose(f_inst);
+    if (f_vaddr  && f_vaddr  != stdout) fclose(f_vaddr);
+    if (f_time   && f_time   != stdout) fclose(f_time);
+    if (f_stride && f_stride != stdout) fclose(f_stride);
+
     cs_close(&cs_handle);
 }
 
 
-
-QEMU_PLUGIN_EXPORT int
-qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_t *info,
-                    int argc, char **argv)
+QEMU_PLUGIN_EXPORT void
+qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_t *info)
 {
+    /* 打开到 /tmp */
+    f_inst   = fopen("/tmp/plugin_inst",   "w");
+    f_vaddr  = fopen("/tmp/plugin_vaddr",  "w");
+    f_time   = fopen("/tmp/plugin_time",   "w");
+    f_stride = fopen("/tmp/plugin_stride", "w");
+    if (!f_inst || !f_vaddr || !f_time || !f_stride) {
+        perror("fopen");
+        f_inst   = f_inst   ? f_inst   : stdout;
+        f_vaddr  = f_vaddr  ? f_vaddr  : stdout;
+        f_time   = f_time   ? f_time   : stdout;
+        f_stride = f_stride ? f_stride : stdout;
+    }
+
+    /* 初始化 Capstone */
     cs_mode mode = CS_MODE_RISCV64 | CS_MODE_RISCVC | CS_MODE_LITTLE_ENDIAN;
     if (cs_open(CS_ARCH_RISCV, mode, &cs_handle) != CS_ERR_OK) {
-        fprintf(stderr, "ERROR: Capstone initialization failed\n");
-        return -1;
+        fprintf(stderr, "ERROR: Capstone init failed\n");
+        return;
     }
     cs_option(cs_handle, CS_OPT_DETAIL, CS_OPT_ON);
 
-    // memset(vcpu_stats_table, 0, sizeof(vcpu_stats_table));
-    // if (pthread_mutex_init(&vcpu_lock, NULL) != 0) {
-    //     fprintf(stderr, "ERROR: Mutex initialization failed\n");
-    //     return -1;
-    // }
-    
-    // vcpu_stats_table[0].active = true;
-    // vcpu_stats_table[0].guest_tid = (int)getpid();
-
+    /* 注册回调 */
     qemu_plugin_register_vcpu_tb_trans_cb(id, tb_trans_cb);
-    // qemu_plugin_register_vcpu_syscall_ret_cb(id, syscall_ret_cb);
     qemu_plugin_register_atexit_cb(id, exit_cb, NULL);
-
-    // printf("INFO: Multi-thread instruction analysis plugin installed.\n");
-    return 0;
 }
