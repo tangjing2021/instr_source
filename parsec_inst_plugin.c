@@ -427,10 +427,6 @@ static void syscall_ret_cb(qemu_plugin_id_t id, unsigned int vcpu_index,
 }
 static void exit_cb(qemu_plugin_id_t id, void *p) {
     // 先计算并打印全局动态指令总数
-    FILE *f_inst  ;
-    FILE *f_vaddr ;
-    FILE *f_time  ;
-    FILE *f_stride;
     FILE *f_inst   = fopen("/tmp/plugin_inst",   "w");
     FILE *f_vaddr  = fopen("/tmp/plugin_vaddr",  "w");
     FILE *f_time   = fopen("/tmp/plugin_time",   "w");
