@@ -427,10 +427,14 @@ static void syscall_ret_cb(qemu_plugin_id_t id, unsigned int vcpu_index,
 }
 static void exit_cb(qemu_plugin_id_t id, void *p) {
     // 先计算并打印全局动态指令总数
-    FILE *f_inst   = fopen("/tmp/plugin_inst",   "w");
-    FILE *f_vaddr  = fopen("/tmp/plugin_vaddr",  "w");
-    FILE *f_time   = fopen("/tmp/plugin_time",   "w");
-    FILE *f_stride = fopen("/tmp/plugin_stride", "w");
+    FILE *f_inst  ;
+    FILE *f_vaddr ;
+    FILE *f_time  ;
+    FILE *f_stride;
+    // FILE *f_inst   = fopen("/tmp/plugin_inst",   "w");
+    // FILE *f_vaddr  = fopen("/tmp/plugin_vaddr",  "w");
+    // FILE *f_time   = fopen("/tmp/plugin_time",   "w");
+    // FILE *f_stride = fopen("/tmp/plugin_stride", "w");
     if (!f_inst || !f_vaddr || !f_time || !f_stride) {
         perror("fopen");
         // 如果打开失败，退回到标准输出
@@ -531,10 +535,10 @@ static void exit_cb(qemu_plugin_id_t id, void *p) {
                 (double)vaddr_disct_count / total_mem_access * 100.0);
     }
     // 关闭文件和清理
-    if (f_inst  != stdout) fclose(f_inst);
-    if (f_vaddr != stdout) fclose(f_vaddr);
-    if (f_time  != stdout) fclose(f_time);
-    if (f_stride != stdout) fclose(f_stride);
+    // if (f_inst  != stdout) fclose(f_inst);
+    // if (f_vaddr != stdout) fclose(f_vaddr);
+    // if (f_time  != stdout) fclose(f_time);
+    // if (f_stride != stdout) fclose(f_stride);
     cs_close(&cs_handle);
 }
 
