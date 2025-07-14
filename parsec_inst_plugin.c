@@ -425,121 +425,72 @@ static void syscall_ret_cb(qemu_plugin_id_t id, unsigned int vcpu_index,
         }
     }
 }
+
 static void exit_cb(qemu_plugin_id_t id, void *p) {
-    // 先计算并打印全局动态指令总数
-    // FILE *f_inst  ;
-    // FILE *f_vaddr ;
-    // FILE *f_time  ;
-    // FILE *f_stride;
-    FILE *f_inst   = fopen("plugin_inst",   "w");
-    FILE *f_vaddr  = fopen("plugin_vaddr",  "w");
-    FILE *f_time   = fopen("plugin_time",   "w");
-    FILE *f_stride = fopen("plugin_stride", "w");
-    if (!f_inst || !f_vaddr || !f_time || !f_stride) {
-        perror("fopen");
-        // 如果打开失败，退回到标准输出
-        f_inst  = f_inst  ? f_inst  : stdout;
-        f_vaddr = f_vaddr ? f_vaddr : stdout;
-        f_time  = f_time  ? f_time  : stdout;
-        f_stride = f_stride ? f_stride : stdout;
+    // 1) Global dynamic instruction total
+    uint64_t global_total = 0;
+    for (int i = 0; instr_type[i]; i++) {
+        global_total += exe_counts[i];
     }
 
-    uint64_t global_dynamic_total = 0;
-    for (int i = 0; instr_type[i]; i++) {
-        global_dynamic_total += exe_counts[i];
-    }
-    fprintf(f_inst, "\n=== Global Instruction Counts ===\n");
+    printf("\n=== Global Instruction Counts ===\n");
     for (int i = 0; instr_type[i]; i++) {
         if (counts[i] > 0 || exe_counts[i] > 0) {
-            fprintf(f_inst, "%-15s : static=%10" PRIu64 " dynamic=%10" PRIu64 "\n",
-                    instr_type[i], counts[i], exe_counts[i]);
+            printf("%-15s : static=%10" PRIu64 " dynamic=%10" PRIu64 "\n",
+                   instr_type[i], counts[i], exe_counts[i]);
         }
     }
-    fprintf(f_inst, ">>> Global Dynamic Instructions Total: %" PRIu64 " <<<\n",
-    global_dynamic_total);
-    
-    get_top(f_vaddr,addr_head);
-    // // —— 新增：打印时间统计 —— 
-    // struct timespec end_ts;
-    // clock_gettime(CLOCK_MONOTONIC, &end_ts);
-    // uint64_t total_ns = (end_ts.tv_sec  - start_ts.tv_sec ) * 1000000000ULL
-    //                   + (end_ts.tv_nsec - start_ts.tv_nsec);
+    printf(">>> Global Dynamic Instructions Total: %" PRIu64 " <<<\n", global_total);
 
-    // printf("\n=== Instruction Class Timing ===\n");
-    // printf("%-15s : %12s\n", "Class", "Time (ms)");
-    // for (int i = 0; instr_type[i]; i++) {
-    //     double ms = class_time_ns[i] / 1e6;
-    //     if(ms==0) continue;
-    //     printf("%-15s : %12.3f\n",
-    //            instr_type[i], ms);
-    // }
-    // printf(">>> Total Elapsed Time: %.3f ms <<<\n", total_ns / 1e6);
-
-    struct timespec end_ts;
-    clock_gettime(CLOCK_MONOTONIC, &end_ts);
-    uint64_t total_ns = (end_ts.tv_sec  - start_ts.tv_sec ) * 1000000000ULL
-                      + (end_ts.tv_nsec - start_ts.tv_nsec);
-
-    fprintf(f_time, "\n=== Instruction Class Timing ===\n");
-    fprintf(f_time, "%-15s : %12s\n", "Class", "Time (ms)");
+    // 2) Instruction class timing
+    printf("\n=== Instruction Class Timing (ms) ===\n");
     for (int i = 0; instr_type[i]; i++) {
         double ms = class_time_ns[i] / 1e6;
-        if (ms == 0) continue;
-        fprintf(f_time, "%-15s : %12.3f\n",
-                instr_type[i], ms);
+        if (ms > 0) {
+            printf("%-15s : %12.3f\n", instr_type[i], ms);
+        }
     }
-    fprintf(f_time, ">>> Total Elapsed Time: %.3f ms <<<\n", total_ns / 1e6);
 
+    // 3) Top hot addresses
+    // printf("\n=== Top %d Hot Addresses ===\n", TREE_TOP);
+    // {
+    //     // reuse get_top logic but print via stdout
+    //     uint64_t addrs[TREE_TOP], reads[TREE_TOP], writes[TREE_TOP], totals[TREE_TOP];
+    //     // flatten tree into these arrays...
+    //     // (for brevity, assume you have a helper that fills these arrays
+    //     //  and returns actual count N)
+    //     int N = collect_top_addresses(addr_head, addrs, reads, writes, totals);
+    //     printf("%-18s %-10s %-10s %-10s\n", "Address", "Reads", "Writes", "Total");
+    //     for (int i = 0; i < N; i++) {
+    //         printf("0x%016" PRIx64 " %-10" PRIu64 " %-10" PRIu64 " %-10" PRIu64 "\n",
+    //                addrs[i], reads[i], writes[i], totals[i]);
+    //     }
+    // }
 
-    // 计算总访问数
-    uint64_t total_mem_access = vaddr_same_count
-        + vaddr_1_count + vaddr_2_count
-        + vaddr_4_count + vaddr_8_count
-        + vaddr_disct_count;
+    // 4) Memory access stride statistics
+    uint64_t total_mem = vaddr_same_count + vaddr_1_count + vaddr_2_count
+                       + vaddr_4_count + vaddr_8_count + vaddr_disct_count;
 
-    if (total_mem_access > 0) {
-        fprintf(f_stride, "\n=== Memory Access Stride Statistics ===\n");
-        fprintf(f_stride, "Total memory accesses: %" PRIu64 "\n", total_mem_access);
+    if (total_mem > 0) {
+        printf("\n=== Memory Access Stride Statistics ===\n");
+        printf("Total memory accesses: %" PRIu64 "\n", total_mem);
+        printf("\n%-20s %12s %12s\n", "Stride Type", "Count", "Percentage");
 
-        // 打印每种步长的统计
-        fprintf(f_stride, "\n%-20s %12s %12s\n", "Stride Type", "Count", "Percentage");
+        #define PRINT_STRIDE(name, cnt) \
+            printf("%-20s %12" PRIu64 " %11.3f%%\n", \
+                name, cnt, (double)(cnt) / total_mem * 100.0)
 
-        // 相同地址访问
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "Same Address", vaddr_same_count,
-                (double)vaddr_same_count / total_mem_access * 100.0);
+        PRINT_STRIDE("Same Address", vaddr_same_count);
+        PRINT_STRIDE("1-byte stride", vaddr_1_count);
+        PRINT_STRIDE("2-byte stride", vaddr_2_count);
+        PRINT_STRIDE("4-byte stride", vaddr_4_count);
+        PRINT_STRIDE("8-byte stride", vaddr_8_count);
+        PRINT_STRIDE("Other strides", vaddr_disct_count);
 
-        // 1字节步长
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "1-byte stride", vaddr_1_count,
-                (double)vaddr_1_count / total_mem_access * 100.0);
-
-        // 2字节步长
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "2-byte stride", vaddr_2_count,
-                (double)vaddr_2_count / total_mem_access * 100.0);
-
-        // 4字节步长
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "4-byte stride", vaddr_4_count,
-                (double)vaddr_4_count / total_mem_access * 100.0);
-
-        // 8字节步长
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "8-byte stride", vaddr_8_count,
-                (double)vaddr_8_count / total_mem_access * 100.0);
-
-        // 离散访问
-        fprintf(f_stride, "%-20s %12" PRIu64 " %11.3f%%\n",
-                "Other strides", vaddr_disct_count,
-                (double)vaddr_disct_count / total_mem_access * 100.0);
+        #undef PRINT_STRIDE
     }
-    // 关闭文件和清理
-    if (f_inst  != stdout) fclose(f_inst);
-    if (f_vaddr != stdout) fclose(f_vaddr);
-    if (f_time  != stdout) fclose(f_time);
-    if (f_stride != stdout) fclose(f_stride);
-    // pthread_mutex_destroy(&vcpu_lock);
+
+    // Clean up Capstone
     cs_close(&cs_handle);
 }
 
@@ -562,8 +513,8 @@ qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_t *info,
     //     return -1;
     // }
     
-    // vcpu_stats_table[0].active = true;
-    // vcpu_stats_table[0].guest_tid = (int)getpid();
+    vcpu_stats_table[0].active = true;
+    vcpu_stats_table[0].guest_tid = (int)getpid();
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, tb_trans_cb);
     // qemu_plugin_register_vcpu_syscall_ret_cb(id, syscall_ret_cb);
