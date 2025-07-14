@@ -431,10 +431,10 @@ static void exit_cb(qemu_plugin_id_t id, void *p) {
     // FILE *f_vaddr ;
     // FILE *f_time  ;
     // FILE *f_stride;
-    FILE *f_inst   = fopen("/tmp/plugin_inst",   "w");
-    FILE *f_vaddr  = fopen("/tmp/plugin_vaddr",  "w");
-    FILE *f_time   = fopen("/tmp/plugin_time",   "w");
-    FILE *f_stride = fopen("/tmp/plugin_stride", "w");
+    FILE *f_inst   = fopen("plugin_inst",   "w");
+    FILE *f_vaddr  = fopen("plugin_vaddr",  "w");
+    FILE *f_time   = fopen("plugin_time",   "w");
+    FILE *f_stride = fopen("plugin_stride", "w");
     if (!f_inst || !f_vaddr || !f_time || !f_stride) {
         perror("fopen");
         // 如果打开失败，退回到标准输出
